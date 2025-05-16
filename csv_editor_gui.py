@@ -1,268 +1,354 @@
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+import customtkinter as ctk
+from tkinter import filedialog, messagebox, ttk
 import pandas as pd
-import csv  # Required for quoting constants like csv.QUOTE_NONNUMERIC
 
+# Varsayılan görünüm modu ve renk teması
+ctk.set_appearance_mode("System")  # "Light", "Dark", "System"
+ctk.set_default_color_theme("blue")  # "blue", "green", "dark-blue"
 
-class CSVMagicEditor(tk.Tk):
+class CSVEditorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("CSV Magic Editor ✨")
-        self.geometry("600x500")
-        self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
-        self.df = None
-        self.file_path = None
+        self.title("Gelişmiş CSV Düzenleyici")
+        self.geometry("900x700") # Pencere boyutunu biraz büyüttük
 
-        style = ttk.Style(self)
-        available_themes = style.theme_names()
-        if 'clam' in available_themes:
-            style.theme_use('clam')
-        elif 'alt' in available_themes:
-            style.theme_use('alt')
+        self.data_frame = None
+        self.filtered_data_frame = None # Filtrelenmiş veriyi tutmak için
 
-        main_frame = ttk.Frame(self, padding="10 10 10 10")
-        main_frame.pack(expand=True, fill=tk.BOTH)
+        # Ana Çerçeve
+        main_frame = ctk.CTkFrame(self)
+        main_frame.pack(pady=20, padx=20, fill="both", expand=True)
 
-        load_frame = ttk.LabelFrame(main_frame, text="1. Load CSV File", padding="10 10")
-        load_frame.pack(fill=tk.X, pady=5)
+        # --- Dosya İşlemleri Çerçevesi ---
+        file_ops_frame = ctk.CTkFrame(main_frame)
+        file_ops_frame.pack(pady=10, padx=10, fill="x")
 
-        self.load_button = ttk.Button(load_frame, text="Load CSV File", command=self.load_csv)
-        self.load_button.pack(side=tk.LEFT, padx=(0, 10))
-        self.file_label = ttk.Label(load_frame, text="No file loaded.")
-        self.file_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.load_button = ctk.CTkButton(file_ops_frame, text="CSV Yükle", command=self.load_csv)
+        self.load_button.pack(side="left", padx=5)
 
-        error_handling_frame = ttk.LabelFrame(main_frame, text="CSV Parsing Options", padding="10 10")
-        error_handling_frame.pack(fill=tk.X, pady=5)
+        self.loaded_file_label = ctk.CTkLabel(file_ops_frame, text="Yüklü dosya: Yok")
+        self.loaded_file_label.pack(side="left", padx=5)
 
-        self.error_handling_var = tk.StringVar(value="Strict (fail on error)")
-        error_options = ["Strict (fail on error)", "Skip bad lines"]
-        self.error_handling_menu = ttk.Combobox(error_handling_frame, textvariable=self.error_handling_var,
-                                                values=error_options, state="readonly", width=25)
-        self.error_handling_menu.pack(side=tk.LEFT)
-        ttk.Label(error_handling_frame, text=" (Choose before loading if errors occur)").pack(side=tk.LEFT, padx=5)
+        # --- Veri Önizleme Çerçevesi ---
+        preview_frame = ctk.CTkFrame(main_frame)
+        preview_frame.pack(pady=10, padx=10, fill="both", expand=True)
 
-        filter_frame = ttk.LabelFrame(main_frame, text="2. Define Filter Condition", padding="10 10")
-        filter_frame.pack(fill=tk.X, pady=5)
+        self.preview_label = ctk.CTkLabel(preview_frame, text="Veri Önizleme (İlk 5 Satır):")
+        self.preview_label.pack(pady=(0,5))
 
-        ttk.Label(filter_frame, text="Filter by Column:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
-        self.filter_column_var = tk.StringVar()
-        self.filter_column_combo = ttk.Combobox(filter_frame, textvariable=self.filter_column_var, state="disabled",
-                                                width=25)
-        self.filter_column_combo.grid(row=0, column=1, sticky=tk.EW, padx=5, pady=2)
-        self.filter_column_combo.bind("<<ComboboxSelected>>", self.update_filter_values)
+        # Treeview için stil
+        style = ttk.Style()
+        # Temaları dene: 'clam', 'alt', 'default', 'classic'
+        # Hangi tema daha iyi görünüyorsa veya CTk ile uyumluysa seçilebilir
+        try:
+            style.theme_use("clam") # Veya 'default' gibi başka bir tema
+        except:
+            print("Clam teması bulunamadı, varsayılan tema kullanılıyor.")
 
-        ttk.Label(filter_frame, text="Where Value is:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
-        self.filter_value_var = tk.StringVar()
-        self.filter_value_combo = ttk.Combobox(filter_frame, textvariable=self.filter_value_var, state="disabled",
-                                               width=25)
-        self.filter_value_combo.grid(row=1, column=1, sticky=tk.EW, padx=5, pady=2)
-        filter_frame.columnconfigure(1, weight=1)
+        # Treeview renklerini CustomTkinter temasına uydurmaya çalışalım
+        # Bu kısım işletim sistemi ve temaya göre değişiklik gösterebilir
+        bg_color = self._apply_appearance_mode(ctk.ThemeManager.theme["CTkFrame"]["fg_color"])
+        text_color = self._apply_appearance_mode(ctk.ThemeManager.theme["CTkLabel"]["text_color"])
+        header_bg_color = self._apply_appearance_mode(ctk.ThemeManager.theme["CTkButton"]["fg_color"])
 
-        update_frame = ttk.LabelFrame(main_frame, text="3. Specify Update", padding="10 10")
-        update_frame.pack(fill=tk.X, pady=5)
+        style.configure("Treeview",
+                        background=bg_color,
+                        foreground=text_color,
+                        fieldbackground=bg_color,
+                        borderwidth=0)
+        style.map('Treeview', background=[('selected', header_bg_color[0])], foreground=[('selected', text_color)]) # header_bg_color[0] koyu modda sorun çıkarabilir, tek renk denenebilir
+        style.configure("Treeview.Heading",
+                        background=header_bg_color[0] if isinstance(header_bg_color, tuple) else header_bg_color,
+                        foreground=text_color, # Başlık metin rengi
+                        relief="flat",
+                        padding=(5,5))
+        style.map("Treeview.Heading",
+                  background=[('active', header_bg_color[1] if isinstance(header_bg_color, tuple) else header_bg_color)])
 
-        ttk.Label(update_frame, text="Column to Update:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
-        self.target_column_var = tk.StringVar()
-        self.target_column_combo = ttk.Combobox(update_frame, textvariable=self.target_column_var, state="disabled",
-                                                width=25)
-        self.target_column_combo.grid(row=0, column=1, sticky=tk.EW, padx=5, pady=2)
 
-        ttk.Label(update_frame, text="Set New Value to:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
-        self.new_value_entry = ttk.Entry(update_frame, state="disabled", width=27)
-        self.new_value_entry.grid(row=1, column=1, sticky=tk.EW, padx=5, pady=2)
-        update_frame.columnconfigure(1, weight=1)
+        self.tree_frame = ctk.CTkFrame(preview_frame) # Scrollbar'ları eklemek için ekstra frame
+        self.tree_frame.pack(fill="both", expand=True)
 
-        self.process_button = ttk.Button(main_frame, text="Apply Changes & Save As...",
-                                         command=self.process_and_save_csv, state="disabled")
-        self.process_button.pack(pady=15)
+        self.tree = ttk.Treeview(self.tree_frame, show="headings", style="Treeview")
+        self.tree_vsb = ttk.Scrollbar(self.tree_frame, orient="vertical", command=self.tree.yview)
+        self.tree_hsb = ttk.Scrollbar(self.tree_frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=self.tree_vsb.set, xscrollcommand=self.tree_hsb.set)
 
-        self.status_var = tk.StringVar(value="Welcome! Load a CSV to begin.")
-        status_bar = ttk.Label(main_frame, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W, padding="5")
-        status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        self.tree_vsb.pack(side="right", fill="y")
+        self.tree_hsb.pack(side="bottom", fill="x")
+        self.tree.pack(fill="both", expand=True)
+
+
+        # --- Filtreleme Çerçevesi ---
+        filter_frame = ctk.CTkFrame(main_frame)
+        filter_frame.pack(pady=10, padx=10, fill="x")
+
+        ctk.CTkLabel(filter_frame, text="Filtrele:").pack(side="left", padx=(0,5))
+        self.filter_column_combo = ctk.CTkComboBox(filter_frame, values=[], state="disabled")
+        self.filter_column_combo.pack(side="left", padx=5)
+
+        ctk.CTkLabel(filter_frame, text="Değer:").pack(side="left", padx=5)
+        self.filter_value_entry = ctk.CTkEntry(filter_frame, placeholder_text="Filtre değeri", state="disabled")
+        self.filter_value_entry.pack(side="left", padx=5, expand=True, fill="x")
+
+        self.apply_filter_button = ctk.CTkButton(filter_frame, text="Filtreyi Uygula/Kaldır", command=self.toggle_filter, state="disabled")
+        self.apply_filter_button.pack(side="left", padx=5)
+
+
+        # --- Değer Değiştirme Çerçevesi ---
+        modify_frame = ctk.CTkFrame(main_frame)
+        modify_frame.pack(pady=10, padx=10, fill="x")
+
+        ctk.CTkLabel(modify_frame, text="Değeri Değiştir:").pack(side="left", padx=(0,5))
+        self.modify_column_combo = ctk.CTkComboBox(modify_frame, values=[], state="disabled")
+        self.modify_column_combo.pack(side="left", padx=5)
+
+        ctk.CTkLabel(modify_frame, text="Yeni Değer:").pack(side="left", padx=5)
+        self.new_value_entry = ctk.CTkEntry(modify_frame, placeholder_text="Yeni değer", state="disabled")
+        self.new_value_entry.pack(side="left", padx=5, expand=True, fill="x")
+
+        self.apply_modify_button = ctk.CTkButton(modify_frame, text="Değişikliği Uygula", command=self.apply_modification, state="disabled")
+        self.apply_modify_button.pack(side="left", padx=5)
+
+        # --- Kaydetme Çerçevesi ---
+        save_frame = ctk.CTkFrame(main_frame)
+        save_frame.pack(pady=10, padx=10, fill="x")
+
+        ctk.CTkLabel(save_frame, text="Satır Sonlandırma:").pack(side="left", padx=(0,5))
+        self.line_ending_combo = ctk.CTkComboBox(save_frame, values=["LF (\\n)", "CRLF (\\r\\n)"], state="disabled")
+        self.line_ending_combo.set("LF (\\n)") # Varsayılan
+        self.line_ending_combo.pack(side="left", padx=5)
+
+        self.save_button = ctk.CTkButton(save_frame, text="Değiştirilmiş CSV'yi Kaydet", command=self.save_csv, state="disabled")
+        self.save_button.pack(side="left", padx=5)
+
+        # Durum Çubuğu
+        self.status_label = ctk.CTkLabel(main_frame, text="Durum: Başlamaya hazır.")
+        self.status_label.pack(pady=10)
+
+
+    def update_treeview(self, df_to_show):
+        # Treeview'i temizle
+        for i in self.tree.get_children():
+            self.tree.delete(i)
+
+        if df_to_show is None or df_to_show.empty:
+            self.tree["columns"] = []
+            return
+
+        # Kolonları ayarla
+        self.tree["columns"] = list(df_to_show.columns)
+        for col in df_to_show.columns:
+            self.tree.heading(col, text=col)
+            self.tree.column(col, anchor="w", width=100) # Genişliği ayarlayabilirsiniz
+
+        # Veri satırlarını ekle (ilk N satırı veya tümünü)
+        # Performans için çok büyük dosyalarda sadece ilk N satırı göstermek daha iyi olabilir
+        # Şimdilik ilk 50 satırı gösterelim
+        for index, row in df_to_show.head(50).iterrows():
+            self.tree.insert("", "end", values=list(row))
+
 
     def load_csv(self):
         file_path = filedialog.askopenfilename(
             defaultextension=".csv",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+            filetypes=[("CSV dosyaları", "*.csv"), ("Tüm dosyalar", "*.*")]
         )
         if not file_path:
             return
 
-        self.file_path = file_path
-        error_mode = self.error_handling_var.get()
-
         try:
-            self.status_var.set(f"Loading {self.file_path.split('/')[-1]}...")
-            self.update_idletasks()
-
-            if error_mode == "Skip bad lines":
-                self.df = pd.read_csv(self.file_path, on_bad_lines='skip', engine='python')
-                self.status_var.set(f"Loaded {self.file_path.split('/')[-1]} (skipped bad lines if any).")
-            else:
-                self.df = pd.read_csv(self.file_path)
-                self.status_var.set(f"Successfully loaded {self.file_path.split('/')[-1]}.")
-
-            if self.df.empty:
-                messagebox.showwarning("Warning", "The loaded CSV is empty or became empty after skipping lines.")
-                self.reset_ui_on_error()
-                self.status_var.set("Loaded CSV is empty.")
-                return
-
-            self.file_label.config(text=self.file_path.split('/')[-1])
-            columns = list(self.df.columns)
-
-            self.filter_column_combo.config(values=columns, state="readonly")
-            self.target_column_combo.config(values=columns, state="readonly")
-
-            self.filter_column_var.set("")
-            self.filter_value_var.set("")
-            self.filter_value_combo.config(values=[], state="disabled")
-            self.target_column_var.set("")
-            self.new_value_entry.delete(0, tk.END)
-
-            self.new_value_entry.config(state="normal")
-            self.process_button.config(state="normal")
-
-        except FileNotFoundError:
-            messagebox.showerror("Error", f"File not found: {self.file_path}")
-            self.status_var.set("Error: File not found.")
-            self.reset_ui_on_error()
-        except pd.errors.EmptyDataError:
-            messagebox.showerror("Error", "The CSV file is empty (no columns or data).")
-            self.status_var.set("Error: CSV file is empty.")
-            self.reset_ui_on_error()
-        except pd.errors.ParserError as e:
-            messagebox.showerror("CSV Parsing Error",
-                                 f"Error parsing CSV file: {e}\n\n"
-                                 f"Details: This often means the file has rows with an unexpected number of fields or other structural issues. "
-                                 f"Try selecting 'Skip bad lines' from the 'CSV Parsing Options' dropdown and loading the file again.")
-            self.status_var.set("Error parsing CSV. Try 'Skip bad lines'.")
-            self.reset_ui_on_error()
-        except Exception as e:
-            messagebox.showerror("Error", f"An unexpected error occurred during loading: {e}")
-            self.status_var.set(f"An unexpected error occurred: {e}")
-            self.reset_ui_on_error()
-
-    def reset_ui_on_error(self):
-        self.df = None
-        self.file_label.config(text="No file loaded.")
-        self.filter_column_combo.config(values=[], state="disabled")
-        self.filter_value_combo.config(values=[], state="disabled")
-        self.target_column_combo.config(values=[], state="disabled")
-        self.new_value_entry.config(state="disabled")
-        self.process_button.config(state="disabled")
-
-        self.filter_column_var.set("")
-        self.filter_value_var.set("")
-        self.target_column_var.set("")
-        if hasattr(self, 'new_value_entry'):
-            self.new_value_entry.delete(0, tk.END)
-
-    def update_filter_values(self, event=None):
-        if self.df is not None and self.filter_column_var.get():
-            selected_col = self.filter_column_var.get()
+            # Olası encoding hatalarını yakalamak için farklı encoding'ler denenebilir
+            # Veya kullanıcıya encoding seçme opsiyonu sunulabilir.
+            # Şimdilik utf-8 ve latin1 deneyelim.
             try:
-                unique_values = sorted(self.df[selected_col].astype(str).unique().tolist())
-                self.filter_value_combo.config(values=unique_values, state="readonly")
-                if unique_values:
-                    self.filter_value_var.set(unique_values[0])
-                else:
-                    self.filter_value_var.set("")
-                self.status_var.set(f"Populated filter values for '{selected_col}'.")
-            except Exception as e:
-                self.status_var.set(f"Error updating filter values: {e}")
-                self.filter_value_combo.config(values=[], state="disabled")
-                self.filter_value_var.set("")
-        else:
-            self.filter_value_combo.config(values=[], state="disabled")
-            self.filter_value_var.set("")
+                self.data_frame = pd.read_csv(file_path)
+            except UnicodeDecodeError:
+                try:
+                    self.data_frame = pd.read_csv(file_path, encoding='latin1')
+                except Exception as e_latin1:
+                    messagebox.showerror("Okuma Hatası", f"Dosya okunamadı (latin1 denendi): {e_latin1}")
+                    return
+            except Exception as e_utf8:
+                 messagebox.showerror("Okuma Hatası", f"Dosya okunamadı (utf-8 denendi): {e_utf8}")
+                 return
 
-    def process_and_save_csv(self):
-        if self.df is None:
-            messagebox.showwarning("Warning", "No CSV data loaded.")
-            self.status_var.set("No data to process. Load a CSV first.")
+
+            self.filtered_data_frame = self.data_frame.copy() # Başlangıçta filtrelenmemiş veri
+            self.update_treeview(self.filtered_data_frame) # Filtrelenmiş veriyi göster
+            self.loaded_file_label.configure(text=f"Yüklü dosya: ...{file_path[-30:]}") # Dosya adının son kısmını göster
+            self.status_label.configure(text=f"{len(self.data_frame)} satır yüklendi.")
+
+            columns = list(self.data_frame.columns)
+            self.filter_column_combo.configure(values=columns, state="normal")
+            self.modify_column_combo.configure(values=columns, state="normal")
+            if columns:
+                self.filter_column_combo.set(columns[0])
+                self.modify_column_combo.set(columns[0])
+
+            self.filter_value_entry.configure(state="normal")
+            self.apply_filter_button.configure(state="normal")
+            self.new_value_entry.configure(state="normal")
+            self.apply_modify_button.configure(state="normal")
+            self.line_ending_combo.configure(state="normal")
+            self.save_button.configure(state="normal")
+
+        except Exception as e:
+            messagebox.showerror("CSV Yükleme Hatası", f"Dosya yüklenirken bir hata oluştu: {e}")
+            self.data_frame = None
+            self.filtered_data_frame = None
+            self.update_treeview(None)
+            self.loaded_file_label.configure(text="Yüklü dosya: Yok")
+            self.disable_controls()
+
+    def disable_controls(self):
+        self.filter_column_combo.configure(state="disabled", values=[])
+        self.filter_value_entry.configure(state="disabled")
+        self.apply_filter_button.configure(state="disabled")
+        self.modify_column_combo.configure(state="disabled", values=[])
+        self.new_value_entry.configure(state="disabled")
+        self.apply_modify_button.configure(state="disabled")
+        self.line_ending_combo.configure(state="disabled")
+        self.save_button.configure(state="disabled")
+
+    def toggle_filter(self):
+        if self.data_frame is None:
+            messagebox.showwarning("Uyarı", "Önce bir CSV dosyası yükleyin.")
             return
 
-        filter_col = self.filter_column_var.get()
-        filter_val_str = self.filter_value_var.get()
-        target_col = self.target_column_var.get()
-        new_val_input = self.new_value_entry.get()
+        filter_col = self.filter_column_combo.get()
+        filter_val_str = self.filter_value_entry.get()
 
-        if not filter_col:
-            messagebox.showwarning("Input Missing", "Please select a 'Filter by Column'.")
-            self.status_var.set("Filter column not selected.")
-            return
-        if not target_col:
-            messagebox.showwarning("Input Missing", "Please select a 'Column to Update'.")
-            self.status_var.set("Target column not selected.")
+        # Eğer filtre zaten uygulanmışsa ve kullanıcı tekrar basıyorsa, filtreyi kaldır
+        if self.filtered_data_frame is not self.data_frame and not filter_val_str: # filtre değeri boşsa ve filtrelenmişse kaldır
+             self.filtered_data_frame = self.data_frame.copy()
+             self.update_treeview(self.filtered_data_frame)
+             self.status_label.configure(text=f"Filtre kaldırıldı. {len(self.filtered_data_frame)} satır gösteriliyor.")
+             self.apply_filter_button.configure(text="Filtreyi Uygula")
+             return
+
+        if not filter_col or not filter_val_str:
+            # Eğer değer girilmemişse ve filtre yoksa, tüm veriyi göster (filtreyi kaldır)
+            self.filtered_data_frame = self.data_frame.copy()
+            self.update_treeview(self.filtered_data_frame)
+            self.status_label.configure(text=f"Filtre kaldırıldı / Değer girilmedi. {len(self.filtered_data_frame)} satır gösteriliyor.")
+            self.apply_filter_button.configure(text="Filtreyi Uygula")
             return
 
         try:
-            modified_df = self.df.copy()
-            mask = modified_df[filter_col].astype(str) == filter_val_str
-
-            if not mask.any():
-                messagebox.showinfo("No Rows Matched",
-                                    f"No rows found where '{filter_col}' (as string) is '{filter_val_str}'. No changes made.")
-                self.status_var.set("No rows matched the filter.")
-                return
-
-            original_target_dtype = modified_df[target_col].dtype
-            converted_new_val = new_val_input
-
-            if new_val_input == "" and not (
-                    pd.api.types.is_string_dtype(original_target_dtype) or original_target_dtype == 'object'):
-                converted_new_val = pd.NA
-            else:
+            # Veri tipini korumaya çalışarak filtrele
+            original_dtype = self.data_frame[filter_col].dtype
+            if pd.api.types.is_numeric_dtype(original_dtype):
                 try:
-                    if original_target_dtype != 'object' and converted_new_val is not pd.NA:
-                        temp_series = pd.Series([new_val_input])
-                        converted_new_val = temp_series.astype(original_target_dtype).iloc[0]
+                    filter_val = pd.to_numeric(filter_val_str)
                 except ValueError:
-                    self.status_var.set(f"Warning: New value for '{target_col}' kept as string due to type mismatch.")
-                except Exception:
-                    self.status_var.set(
-                        f"Warning: New value for '{target_col}' kept as string due to a type conversion issue.")
+                    messagebox.showerror("Filtre Hatası", f"'{filter_col}' sayısal bir kolon, lütfen geçerli bir sayı girin.")
+                    return
+            elif pd.api.types.is_datetime64_any_dtype(original_dtype):
+                try:
+                    filter_val = pd.to_datetime(filter_val_str)
+                except ValueError:
+                     messagebox.showerror("Filtre Hatası", f"'{filter_col}' tarih/saat kolonu, lütfen geçerli bir format girin (örn: YYYY-AA-GG).")
+                     return
+            else: # String veya diğer tipler
+                filter_val = filter_val_str
 
-            modified_df.loc[mask, target_col] = converted_new_val
-
-            save_path = filedialog.asksaveasfilename(
-                defaultextension=".csv",
-                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
-                initialfile=f"edited_{self.file_path.split('/')[-1] if self.file_path else 'output.csv'}"
-            )
-
-            if save_path:
-                # --- KEY CHANGE HERE ---
-                # Explicitly set delimiter to comma (though it's default)
-                # Change quoting to QUOTE_NONNUMERIC: quotes all fields that are not numbers.
-                # This is often more compatible with systems that are picky about CSV formats.
-                modified_df.to_csv(
-                    save_path,
-                    index=False,
-                    sep=',',  # Explicitly comma delimiter
-                    quoting=csv.QUOTE_NONNUMERIC  # Quote non-numeric fields
-                )
-                messagebox.showinfo("Success", f"Modified CSV saved to:\n{save_path}")
-                self.status_var.set(f"Changes saved to {save_path.split('/')[-1]} (using QUOTE_NONNUMERIC).")
-            else:
-                self.status_var.set("Save operation cancelled.")
-
-        except KeyError as e:
-            messagebox.showerror("Error", f"Column not found: {e}. Please reload the file or check column names.")
-            self.status_var.set(f"Error: Column {e} not found.")
+            self.filtered_data_frame = self.data_frame[self.data_frame[filter_col] == filter_val].copy()
+            self.update_treeview(self.filtered_data_frame)
+            self.status_label.configure(text=f"Filtre uygulandı. {len(self.filtered_data_frame)} satır bulundu.")
+            self.apply_filter_button.configure(text="Filtreyi Kaldır") # Buton metnini değiştir
         except Exception as e:
-            messagebox.showerror("Processing Error", f"An error occurred during processing: {e}")
-            self.status_var.set(f"Processing error: {e}")
-            import traceback
-            print("Error during processing details:", traceback.format_exc())
+            messagebox.showerror("Filtreleme Hatası", f"Filtre uygulanırken hata: {e}")
 
-    def on_closing(self):
-        if messagebox.askokcancel("Quit", "Do you want to quit CSV Magic Editor?"):
-            self.destroy()
 
+    def apply_modification(self):
+        if self.data_frame is None or self.filtered_data_frame is None: # data_frame yerine filtered_data_frame kontrolü
+            messagebox.showwarning("Uyarı", "Önce bir CSV dosyası yükleyin ve gerekiyorsa filtreleyin.")
+            return
+
+        modify_col = self.modify_column_combo.get()
+        new_val_str = self.new_value_entry.get()
+
+        if not modify_col:
+            messagebox.showwarning("Uyarı", "Değiştirilecek bir kolon seçin.")
+            return
+
+        try:
+            # Yeni değeri, hedef kolonun veri tipine dönüştürmeye çalış
+            target_dtype = self.data_frame[modify_col].dtype
+            if pd.api.types.is_numeric_dtype(target_dtype):
+                try:
+                    new_val = pd.to_numeric(new_val_str)
+                except ValueError:
+                    if new_val_str == "": # Boş değer NaN (Not a Number) olarak atanabilir
+                        new_val = pd.NA
+                    else:
+                        messagebox.showerror("Değer Hatası", f"'{modify_col}' sayısal bir kolon, lütfen geçerli bir sayı girin veya boş bırakın.")
+                        return
+            elif pd.api.types.is_datetime64_any_dtype(target_dtype):
+                try:
+                    new_val = pd.to_datetime(new_val_str)
+                except ValueError:
+                    if new_val_str == "":
+                        new_val = pd.NaT # Not a Time
+                    else:
+                        messagebox.showerror("Değer Hatası", f"'{modify_col}' tarih/saat kolonu, lütfen geçerli bir format girin veya boş bırakın.")
+                        return
+            elif pd.api.types.is_boolean_dtype(target_dtype):
+                if new_val_str.lower() in ['true', '1', 'evet', 'doğru']:
+                    new_val = True
+                elif new_val_str.lower() in ['false', '0', 'hayır', 'yanlış']:
+                    new_val = False
+                elif new_val_str == "" and target_dtype == 'boolean': # Pandas 'boolean' (nullable)
+                    new_val = pd.NA
+                else:
+                    messagebox.showerror("Değer Hatası", f"'{modify_col}' boolean bir kolon, lütfen 'true'/'false' gibi bir değer girin.")
+                    return
+            else: # String veya object
+                new_val = new_val_str
+
+
+            # Değişikliği hem filtrelenmiş DataFrame'de (görsel geri bildirim için)
+            # hem de ana DataFrame'de (kayıt için) yap.
+            # ÖNEMLİ: Filtrelenmiş DataFrame'in indekslerini kullanarak ana DataFrame'i güncelle.
+            indices_to_modify = self.filtered_data_frame.index
+            self.data_frame.loc[indices_to_modify, modify_col] = new_val
+
+            # Filtrelenmiş veriyi de güncelle (eğer ayrı bir kopya ise)
+            self.filtered_data_frame.loc[indices_to_modify, modify_col] = new_val
+
+            self.update_treeview(self.filtered_data_frame) # Güncellenmiş veriyi göster
+            self.status_label.configure(text=f"'{modify_col}' kolonundaki {len(indices_to_modify)} satır '{new_val_str}' olarak güncellendi.")
+            messagebox.showinfo("Başarılı", f"Değişiklikler uygulandı.")
+
+        except Exception as e:
+            messagebox.showerror("Değiştirme Hatası", f"Değer değiştirilirken hata: {e}")
+
+
+    def save_csv(self):
+        if self.data_frame is None:
+            messagebox.showwarning("Uyarı", "Kaydedilecek veri yok. Önce bir CSV yükleyin.")
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV dosyaları", "*.csv"), ("Tüm dosyalar", "*.*")],
+            initialfile="guncellenmis_veri.csv"
+        )
+        if not file_path:
+            return
+
+        line_ending_choice = self.line_ending_combo.get()
+        terminator = '\n' if line_ending_choice == "LF (\\n)" else '\r\n'
+
+        try:
+            self.data_frame.to_csv(file_path, index=False, line_terminator=terminator, encoding='utf-8-sig') # utf-8-sig Excel uyumluluğu için
+            self.status_label.configure(text=f"Dosya '{file_path}' olarak kaydedildi.")
+            messagebox.showinfo("Başarılı", f"Dosya başarıyla kaydedildi:\n{file_path}")
+        except Exception as e:
+            messagebox.showerror("Kaydetme Hatası", f"Dosya kaydedilirken bir hata oluştu: {e}")
 
 if __name__ == "__main__":
-    app = CSVMagicEditor()
+    app = CSVEditorApp()
     app.mainloop()
