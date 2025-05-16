@@ -1,338 +1,268 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import pandas as pd
-import os
+import csv  # Required for quoting constants like csv.QUOTE_NONNUMERIC
 
 
-class CSVEditorApp:
-    def __init__(self, master):
-        self.master = master
-        master.title("CSV Editor")
-        master.geometry("650x550")  # Adjusted size for better layout
+class CSVMagicEditor(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("CSV Magic Editor ✨")
+        self.geometry("600x500")
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
         self.df = None
-        self.modified_df = None
-        self.input_file_path_display = tk.StringVar()  # For display
-        self.full_input_file_path = None  # For internal use
+        self.file_path = None
 
-        self.condition_column = tk.StringVar()
-        self.condition_value = tk.StringVar()
-        self.target_column = tk.StringVar()
-        self.new_value = tk.StringVar()
+        style = ttk.Style(self)
+        available_themes = style.theme_names()
+        if 'clam' in available_themes:
+            style.theme_use('clam')
+        elif 'alt' in available_themes:
+            style.theme_use('alt')
 
-        # --- UI Elements ---
+        main_frame = ttk.Frame(self, padding="10 10 10 10")
+        main_frame.pack(expand=True, fill=tk.BOTH)
 
-        # Frame for file operations
-        file_frame = ttk.LabelFrame(master, text="1. File Operations")
-        file_frame.pack(padx=10, pady=10, fill="x")
+        load_frame = ttk.LabelFrame(main_frame, text="1. Load CSV File", padding="10 10")
+        load_frame.pack(fill=tk.X, pady=5)
 
-        ttk.Button(file_frame, text="Load CSV", command=self.load_csv).pack(side=tk.LEFT, padx=5, pady=5)
-        self.file_path_label = ttk.Label(file_frame, textvariable=self.input_file_path_display)
-        self.file_path_label.pack(side=tk.LEFT, padx=5, pady=5, fill="x", expand=True)
-        self.input_file_path_display.set("No file loaded.")
+        self.load_button = ttk.Button(load_frame, text="Load CSV File", command=self.load_csv)
+        self.load_button.pack(side=tk.LEFT, padx=(0, 10))
+        self.file_label = ttk.Label(load_frame, text="No file loaded.")
+        self.file_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        # Frame for specifying conditions and modifications
-        edit_frame = ttk.LabelFrame(master, text="2. Define Changes")
-        edit_frame.pack(padx=10, pady=(0, 10), fill="x")  # Reduced pady top
+        error_handling_frame = ttk.LabelFrame(main_frame, text="CSV Parsing Options", padding="10 10")
+        error_handling_frame.pack(fill=tk.X, pady=5)
 
-        # Condition Column
-        ttk.Label(edit_frame, text="Filter Column (where condition applies):").grid(row=0, column=0, padx=5, pady=5,
-                                                                                    sticky="w")
-        self.combo_condition_column = ttk.Combobox(edit_frame, textvariable=self.condition_column, state="readonly",
-                                                   width=30)
-        self.combo_condition_column.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
-        self.combo_condition_column.bind("<<ComboboxSelected>>", self.update_condition_values_preview)
+        self.error_handling_var = tk.StringVar(value="Strict (fail on error)")
+        error_options = ["Strict (fail on error)", "Skip bad lines"]
+        self.error_handling_menu = ttk.Combobox(error_handling_frame, textvariable=self.error_handling_var,
+                                                values=error_options, state="readonly", width=25)
+        self.error_handling_menu.pack(side=tk.LEFT)
+        ttk.Label(error_handling_frame, text=" (Choose before loading if errors occur)").pack(side=tk.LEFT, padx=5)
 
-        # Condition Value Preview
-        ttk.Label(edit_frame, text="Unique values in Filter Column:").grid(row=1, column=0, padx=5, pady=5, sticky="nw")
-        listbox_frame = ttk.Frame(edit_frame)  # Frame to hold listbox and scrollbar
-        listbox_frame.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+        filter_frame = ttk.LabelFrame(main_frame, text="2. Define Filter Condition", padding="10 10")
+        filter_frame.pack(fill=tk.X, pady=5)
 
-        self.condition_values_listbox = tk.Listbox(listbox_frame, height=5, width=30)  # Height can be adjusted
-        self.condition_values_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        ttk.Label(filter_frame, text="Filter by Column:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
+        self.filter_column_var = tk.StringVar()
+        self.filter_column_combo = ttk.Combobox(filter_frame, textvariable=self.filter_column_var, state="disabled",
+                                                width=25)
+        self.filter_column_combo.grid(row=0, column=1, sticky=tk.EW, padx=5, pady=2)
+        self.filter_column_combo.bind("<<ComboboxSelected>>", self.update_filter_values)
 
-        scrollbar = ttk.Scrollbar(listbox_frame, orient="vertical", command=self.condition_values_listbox.yview)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.condition_values_listbox.configure(yscrollcommand=scrollbar.set)
-        self.condition_values_listbox.bind('<<ListboxSelect>>', self.on_listbox_select)
+        ttk.Label(filter_frame, text="Where Value is:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
+        self.filter_value_var = tk.StringVar()
+        self.filter_value_combo = ttk.Combobox(filter_frame, textvariable=self.filter_value_var, state="disabled",
+                                               width=25)
+        self.filter_value_combo.grid(row=1, column=1, sticky=tk.EW, padx=5, pady=2)
+        filter_frame.columnconfigure(1, weight=1)
 
-        # Condition Value
-        ttk.Label(edit_frame, text="Filter Value (e.g., generalPlastics):").grid(row=2, column=0, padx=5, pady=5,
-                                                                                 sticky="w")
-        self.entry_condition_value = ttk.Entry(edit_frame, textvariable=self.condition_value, width=33)
-        self.entry_condition_value.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
+        update_frame = ttk.LabelFrame(main_frame, text="3. Specify Update", padding="10 10")
+        update_frame.pack(fill=tk.X, pady=5)
 
-        # Target Column
-        ttk.Label(edit_frame, text="Target Column (to change values in):").grid(row=3, column=0, padx=5, pady=5,
-                                                                                sticky="w")
-        self.combo_target_column = ttk.Combobox(edit_frame, textvariable=self.target_column, state="readonly", width=30)
-        self.combo_target_column.grid(row=3, column=1, padx=5, pady=5, sticky="ew")
+        ttk.Label(update_frame, text="Column to Update:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
+        self.target_column_var = tk.StringVar()
+        self.target_column_combo = ttk.Combobox(update_frame, textvariable=self.target_column_var, state="disabled",
+                                                width=25)
+        self.target_column_combo.grid(row=0, column=1, sticky=tk.EW, padx=5, pady=2)
 
-        # New Value
-        ttk.Label(edit_frame, text="New Value (to set in Target Column):").grid(row=4, column=0, padx=5, pady=5,
-                                                                                sticky="w")
-        self.entry_new_value = ttk.Entry(edit_frame, textvariable=self.new_value, width=33)
-        self.entry_new_value.grid(row=4, column=1, padx=5, pady=5, sticky="ew")
+        ttk.Label(update_frame, text="Set New Value to:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
+        self.new_value_entry = ttk.Entry(update_frame, state="disabled", width=27)
+        self.new_value_entry.grid(row=1, column=1, sticky=tk.EW, padx=5, pady=2)
+        update_frame.columnconfigure(1, weight=1)
 
-        edit_frame.grid_columnconfigure(1, weight=1)  # Make comboboxes and entries expand
+        self.process_button = ttk.Button(main_frame, text="Apply Changes & Save As...",
+                                         command=self.process_and_save_csv, state="disabled")
+        self.process_button.pack(pady=15)
 
-        # Frame for actions
-        action_frame = ttk.LabelFrame(master, text="3. Execute and Save")
-        action_frame.pack(padx=10, pady=10, fill="x")
-
-        ttk.Button(action_frame, text="Apply Changes to Preview", command=self.apply_changes).pack(side=tk.LEFT, padx=5,
-                                                                                                   pady=5)
-        ttk.Button(action_frame, text="Save Modified CSV As...", command=self.save_csv).pack(side=tk.LEFT, padx=5,
-                                                                                             pady=5)
-
-        # Status Bar
-        self.status_bar = ttk.Label(master, text="Status: Ready", relief=tk.SUNKEN, anchor="w")
-        self.status_bar.pack(side=tk.BOTTOM, fill="x", padx=10, pady=5)
-
-    def on_listbox_select(self, event=None):
-        widget = event.widget
-        selection = widget.curselection()
-        if selection:
-            index = selection[0]
-            value = widget.get(index)
-            # Avoid setting if it's an indicator like "... (and more)"
-            if not value.startswith("... (and more"):
-                self.condition_value.set(value)
-
-    def update_condition_values_preview(self, event=None):
-        self.condition_values_listbox.delete(0, tk.END)
-        selected_col = self.condition_column.get()
-        if self.df is not None and selected_col:
-            try:
-                unique_values = self.df[
-                    selected_col].dropna().unique()  # dropna to avoid issues with string conversion of NaN
-                # Limit the number of unique values displayed
-                display_limit = 100
-                count = 0
-                for val in unique_values:
-                    self.condition_values_listbox.insert(tk.END, str(val))
-                    count += 1
-                    if count >= display_limit and len(unique_values) > display_limit:
-                        self.condition_values_listbox.insert(tk.END,
-                                                             f"... (and {len(unique_values) - display_limit} more)")
-                        break
-            except Exception as e:
-                self.condition_values_listbox.insert(tk.END, "Error fetching values.")
-                self.update_status(f"Error updating preview: {e}")
+        self.status_var = tk.StringVar(value="Welcome! Load a CSV to begin.")
+        status_bar = ttk.Label(main_frame, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W, padding="5")
+        status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
     def load_csv(self):
         file_path = filedialog.askopenfilename(
-            title="Select CSV file",
-            filetypes=(("CSV files", "*.csv"), ("All files", "*.*"))
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
         )
         if not file_path:
-            self.update_status("File selection cancelled.")
             return
+
+        self.file_path = file_path
+        error_mode = self.error_handling_var.get()
 
         try:
-            self.df = pd.read_csv(file_path)
-            self.modified_df = self.df.copy()  # Initialize modified_df
-            self.full_input_file_path = file_path
-            self.input_file_path_display.set(os.path.basename(file_path))
-            self.update_status(
-                f"Loaded: {os.path.basename(file_path)}. Rows: {len(self.df)}, Columns: {len(self.df.columns)}")
+            self.status_var.set(f"Loading {self.file_path.split('/')[-1]}...")
+            self.update_idletasks()
 
-            column_names = list(self.df.columns)
-            self.combo_condition_column['values'] = column_names
-            self.combo_target_column['values'] = column_names
-            if column_names:
-                self.condition_column.set(column_names[0])
-                self.target_column.set(column_names[0])
-                self.update_condition_values_preview()  # Update preview for default selection
-            else:  # Empty CSV or headerless
-                self.combo_condition_column['values'] = []
-                self.combo_target_column['values'] = []
-                self.condition_column.set("")
-                self.target_column.set("")
-                self.condition_values_listbox.delete(0, tk.END)
-
-            messagebox.showinfo("CSV Loaded",
-                                f"Successfully loaded '{os.path.basename(file_path)}'.\nPlease select columns and enter values for editing.")
-        except Exception as e:
-            self.df = None
-            self.modified_df = None
-            self.full_input_file_path = None
-            self.input_file_path_display.set("Failed to load file.")
-            self.combo_condition_column['values'] = []
-            self.combo_target_column['values'] = []
-            self.condition_column.set("")
-            self.target_column.set("")
-            self.condition_values_listbox.delete(0, tk.END)
-            messagebox.showerror("Error", f"Failed to read CSV file: {e}")
-            self.update_status(f"Error loading CSV: {e}")
-
-    def apply_changes(self):
-        if self.df is None:
-            messagebox.showwarning("No CSV Loaded", "Please load a CSV file first.")
-            self.update_status("Apply failed: No CSV loaded.")
-            return
-
-        cond_col = self.condition_column.get()
-        cond_val_str = self.condition_value.get()
-        target_col = self.target_column.get()
-        new_val_str = self.new_value.get()
-
-        if not all([cond_col, target_col]):  # cond_val_str can be empty, new_val_str can be empty
-            messagebox.showwarning("Missing Information", "Please select both a Filter Column and a Target Column.")
-            self.update_status("Apply failed: Missing column selections.")
-            return
-
-        # Make a fresh copy from the original for each "Apply"
-        self.modified_df = self.df.copy()
-        original_target_col_dtype = self.modified_df[target_col].dtype  # Store original dtype
-
-        # --- Condition Value Typing ---
-        condition_value_typed = cond_val_str
-        if cond_col and cond_val_str:  # Only attempt conversion if value is not empty
-            try:
-                col_dtype = self.modified_df[cond_col].dtype
-                # Handle numeric types (int, float)
-                if pd.api.types.is_numeric_dtype(col_dtype) and not pd.api.types.is_bool_dtype(col_dtype):
-                    try:
-                        # Try to convert to the specific type of the column (e.g. int64, float64)
-                        condition_value_typed = pd.Series([cond_val_str]).astype(col_dtype).iloc[0]
-                    except ValueError:
-                        self.update_status(
-                            f"Warning: Condition value '{cond_val_str}' not valid for numeric column '{cond_col}'. Using string match.")
-                        condition_value_typed = cond_val_str  # Fallback
-                # Handle boolean types
-                elif pd.api.types.is_bool_dtype(col_dtype):
-                    if cond_val_str.lower() in ['true', '1', 't']:
-                        condition_value_typed = True
-                    elif cond_val_str.lower() in ['false', '0', 'f']:
-                        condition_value_typed = False
-                    else:
-                        self.update_status(
-                            f"Warning: Condition value '{cond_val_str}' not boolean for '{cond_col}'. Using string match.")
-                        condition_value_typed = cond_val_str  # Fallback
-                # For object/string, no conversion needed usually, direct string is fine
-            except Exception as e:
-                self.update_status(f"Note: Type conversion for condition value failed: {e}. Using string match.")
-                condition_value_typed = cond_val_str
-
-        # --- New Value Typing ---
-        new_value_typed = new_val_str  # Default to string
-        if target_col:
-            try:
-                target_col_series = self.modified_df[target_col]
-                if new_val_str == "":  # Handling empty string input for new value
-                    if pd.api.types.is_string_dtype(target_col_series.dtype) or pd.api.types.is_object_dtype(
-                            target_col_series.dtype):
-                        new_value_typed = ""  # Keep as empty string for string/object columns
-                    else:
-                        new_value_typed = pd.NA  # Use pandas NA for missing value in numeric/bool/datetime etc.
-                else:
-                    # Attempt to convert to original column type if possible
-                    try:
-                        new_value_typed = pd.Series([new_val_str]).astype(original_target_col_dtype).iloc[0]
-                    except (ValueError, TypeError):
-                        # If direct cast fails, try more general numeric/bool, then fallback to string
-                        if pd.api.types.is_integer_dtype(original_target_col_dtype):
-                            try:
-                                new_value_typed = int(float(new_val_str))  # float first for "60.0"
-                            except ValueError:
-                                self.update_status(
-                                    f"Warning: New value '{new_val_str}' for int column '{target_col}' is invalid. Using string.")
-                        elif pd.api.types.is_float_dtype(original_target_col_dtype):
-                            try:
-                                new_value_typed = float(new_val_str)
-                            except ValueError:
-                                self.update_status(
-                                    f"Warning: New value '{new_val_str}' for float column '{target_col}' is invalid. Using string.")
-                        elif pd.api.types.is_bool_dtype(original_target_col_dtype):
-                            if new_val_str.lower() in ['true', '1', 't']:
-                                new_value_typed = True
-                            elif new_val_str.lower() in ['false', '0', 'f']:
-                                new_value_typed = False
-                            else:
-                                self.update_status(
-                                    f"Warning: New value '{new_val_str}' for bool column '{target_col}' is invalid. Using string.")
-                        # else, it remains new_val_str (string)
-            except Exception as e:
-                self.update_status(f"Error determining type for new value: {e}. Using input string '{new_val_str}'.")
-
-        try:
-            # Create mask for rows that match the condition
-            mask = pd.Series([False] * len(self.modified_df))  # Default to no matches
-            if cond_col:  # Only apply mask if a condition column is selected
-                # Try direct comparison first
-                try:
-                    mask = (self.modified_df[cond_col] == condition_value_typed)
-                    # For NA values in condition column, `==` behaves differently.
-                    # If condition_value_typed is also NA-like, handle that.
-                    if pd.isna(condition_value_typed):  # If user wants to match NA values
-                        mask = self.modified_df[cond_col].isna()
-
-                except TypeError:  # If direct comparison fails due to mixed types
-                    self.update_status("Warning: Type mismatch in condition filter. Comparing as strings.")
-                    mask = (self.modified_df[cond_col].astype(str) == str(condition_value_typed))
-            else:  # If no condition column, implies change all rows (or we should prevent this)
-                # For this app, a condition is implied. If cond_col is empty, we do nothing.
-                # The check `if not all([cond_col, target_col]):` handles this.
-                pass
-
-            num_rows_matched = mask.sum()
-
-            if num_rows_matched > 0:
-                self.modified_df.loc[mask, target_col] = new_value_typed
-                msg = f"Applied: {num_rows_matched} row(s) in '{target_col}' set to '{new_val_str}' where '{cond_col}' was '{cond_val_str}'."
-                messagebox.showinfo("Changes Applied (Preview)", msg + "\n\nClick 'Save Modified CSV As...' to save.")
-                self.update_status(msg)
+            if error_mode == "Skip bad lines":
+                self.df = pd.read_csv(self.file_path, on_bad_lines='skip', engine='python')
+                self.status_var.set(f"Loaded {self.file_path.split('/')[-1]} (skipped bad lines if any).")
             else:
-                msg = f"No rows found where '{cond_col}' is '{cond_val_str}'. No changes applied to preview."
-                messagebox.showinfo("No Matches", msg)
-                self.update_status(msg)
-        except Exception as e:
-            messagebox.showerror("Error Applying Changes",
-                                 f"An error occurred: {e}\n\nModifications have been reverted in preview.")
-            self.update_status(f"Error applying changes: {e}")
-            self.modified_df = self.df.copy()  # Revert to original on error
+                self.df = pd.read_csv(self.file_path)
+                self.status_var.set(f"Successfully loaded {self.file_path.split('/')[-1]}.")
 
-    def save_csv(self):
-        if self.modified_df is None:
-            messagebox.showwarning("No Data to Save",
-                                   "Please load and apply changes to a CSV file first, or load a file if no changes are needed for saving.")
-            self.update_status("Save failed: No data.")
-            return
-        if self.df is not None and self.modified_df.equals(self.df) and self.full_input_file_path is not None:
-            if not messagebox.askyesno("No Changes Detected",
-                                       "No changes have been applied to the data since loading. Do you still want to save it (possibly to a new location)?"):
-                self.update_status("Save cancelled: No changes.")
+            if self.df.empty:
+                messagebox.showwarning("Warning", "The loaded CSV is empty or became empty after skipping lines.")
+                self.reset_ui_on_error()
+                self.status_var.set("Loaded CSV is empty.")
                 return
 
-        output_file_path = filedialog.asksaveasfilename(
-            defaultextension=".csv",
-            filetypes=(("CSV files", "*.csv"), ("All files", "*.*")),
-            title="Save Modified CSV As",
-            initialfile=f"modified_{os.path.basename(self.full_input_file_path)}" if self.full_input_file_path else "modified_output.csv"
-        )
+            self.file_label.config(text=self.file_path.split('/')[-1])
+            columns = list(self.df.columns)
 
-        if not output_file_path:
-            self.update_status("Save cancelled by user.")
+            self.filter_column_combo.config(values=columns, state="readonly")
+            self.target_column_combo.config(values=columns, state="readonly")
+
+            self.filter_column_var.set("")
+            self.filter_value_var.set("")
+            self.filter_value_combo.config(values=[], state="disabled")
+            self.target_column_var.set("")
+            self.new_value_entry.delete(0, tk.END)
+
+            self.new_value_entry.config(state="normal")
+            self.process_button.config(state="normal")
+
+        except FileNotFoundError:
+            messagebox.showerror("Error", f"File not found: {self.file_path}")
+            self.status_var.set("Error: File not found.")
+            self.reset_ui_on_error()
+        except pd.errors.EmptyDataError:
+            messagebox.showerror("Error", "The CSV file is empty (no columns or data).")
+            self.status_var.set("Error: CSV file is empty.")
+            self.reset_ui_on_error()
+        except pd.errors.ParserError as e:
+            messagebox.showerror("CSV Parsing Error",
+                                 f"Error parsing CSV file: {e}\n\n"
+                                 f"Details: This often means the file has rows with an unexpected number of fields or other structural issues. "
+                                 f"Try selecting 'Skip bad lines' from the 'CSV Parsing Options' dropdown and loading the file again.")
+            self.status_var.set("Error parsing CSV. Try 'Skip bad lines'.")
+            self.reset_ui_on_error()
+        except Exception as e:
+            messagebox.showerror("Error", f"An unexpected error occurred during loading: {e}")
+            self.status_var.set(f"An unexpected error occurred: {e}")
+            self.reset_ui_on_error()
+
+    def reset_ui_on_error(self):
+        self.df = None
+        self.file_label.config(text="No file loaded.")
+        self.filter_column_combo.config(values=[], state="disabled")
+        self.filter_value_combo.config(values=[], state="disabled")
+        self.target_column_combo.config(values=[], state="disabled")
+        self.new_value_entry.config(state="disabled")
+        self.process_button.config(state="disabled")
+
+        self.filter_column_var.set("")
+        self.filter_value_var.set("")
+        self.target_column_var.set("")
+        if hasattr(self, 'new_value_entry'):
+            self.new_value_entry.delete(0, tk.END)
+
+    def update_filter_values(self, event=None):
+        if self.df is not None and self.filter_column_var.get():
+            selected_col = self.filter_column_var.get()
+            try:
+                unique_values = sorted(self.df[selected_col].astype(str).unique().tolist())
+                self.filter_value_combo.config(values=unique_values, state="readonly")
+                if unique_values:
+                    self.filter_value_var.set(unique_values[0])
+                else:
+                    self.filter_value_var.set("")
+                self.status_var.set(f"Populated filter values for '{selected_col}'.")
+            except Exception as e:
+                self.status_var.set(f"Error updating filter values: {e}")
+                self.filter_value_combo.config(values=[], state="disabled")
+                self.filter_value_var.set("")
+        else:
+            self.filter_value_combo.config(values=[], state="disabled")
+            self.filter_value_var.set("")
+
+    def process_and_save_csv(self):
+        if self.df is None:
+            messagebox.showwarning("Warning", "No CSV data loaded.")
+            self.status_var.set("No data to process. Load a CSV first.")
+            return
+
+        filter_col = self.filter_column_var.get()
+        filter_val_str = self.filter_value_var.get()
+        target_col = self.target_column_var.get()
+        new_val_input = self.new_value_entry.get()
+
+        if not filter_col:
+            messagebox.showwarning("Input Missing", "Please select a 'Filter by Column'.")
+            self.status_var.set("Filter column not selected.")
+            return
+        if not target_col:
+            messagebox.showwarning("Input Missing", "Please select a 'Column to Update'.")
+            self.status_var.set("Target column not selected.")
             return
 
         try:
-            self.modified_df.to_csv(output_file_path, index=False)
-            messagebox.showinfo("Save Successful", f"Modified CSV saved to:\n{output_file_path}")
-            self.update_status(f"Saved to: {output_file_path}")
+            modified_df = self.df.copy()
+            mask = modified_df[filter_col].astype(str) == filter_val_str
+
+            if not mask.any():
+                messagebox.showinfo("No Rows Matched",
+                                    f"No rows found where '{filter_col}' (as string) is '{filter_val_str}'. No changes made.")
+                self.status_var.set("No rows matched the filter.")
+                return
+
+            original_target_dtype = modified_df[target_col].dtype
+            converted_new_val = new_val_input
+
+            if new_val_input == "" and not (
+                    pd.api.types.is_string_dtype(original_target_dtype) or original_target_dtype == 'object'):
+                converted_new_val = pd.NA
+            else:
+                try:
+                    if original_target_dtype != 'object' and converted_new_val is not pd.NA:
+                        temp_series = pd.Series([new_val_input])
+                        converted_new_val = temp_series.astype(original_target_dtype).iloc[0]
+                except ValueError:
+                    self.status_var.set(f"Warning: New value for '{target_col}' kept as string due to type mismatch.")
+                except Exception:
+                    self.status_var.set(
+                        f"Warning: New value for '{target_col}' kept as string due to a type conversion issue.")
+
+            modified_df.loc[mask, target_col] = converted_new_val
+
+            save_path = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+                initialfile=f"edited_{self.file_path.split('/')[-1] if self.file_path else 'output.csv'}"
+            )
+
+            if save_path:
+                # --- KEY CHANGE HERE ---
+                # Explicitly set delimiter to comma (though it's default)
+                # Change quoting to QUOTE_NONNUMERIC: quotes all fields that are not numbers.
+                # This is often more compatible with systems that are picky about CSV formats.
+                modified_df.to_csv(
+                    save_path,
+                    index=False,
+                    sep=',',  # Explicitly comma delimiter
+                    quoting=csv.QUOTE_NONNUMERIC  # Quote non-numeric fields
+                )
+                messagebox.showinfo("Success", f"Modified CSV saved to:\n{save_path}")
+                self.status_var.set(f"Changes saved to {save_path.split('/')[-1]} (using QUOTE_NONNUMERIC).")
+            else:
+                self.status_var.set("Save operation cancelled.")
+
+        except KeyError as e:
+            messagebox.showerror("Error", f"Column not found: {e}. Please reload the file or check column names.")
+            self.status_var.set(f"Error: Column {e} not found.")
         except Exception as e:
-            messagebox.showerror("Save Error", f"Failed to save CSV file: {e}")
-            self.update_status(f"Error saving CSV: {e}")
+            messagebox.showerror("Processing Error", f"An error occurred during processing: {e}")
+            self.status_var.set(f"Processing error: {e}")
+            import traceback
+            print("Error during processing details:", traceback.format_exc())
 
-    def update_status(self, message):
-        self.status_bar.config(text=f"Status: {message}")
-
-
-def main():
-    root = tk.Tk()
-    app = CSVEditorApp(root)
-    root.mainloop()
+    def on_closing(self):
+        if messagebox.askokcancel("Quit", "Do you want to quit CSV Magic Editor?"):
+            self.destroy()
 
 
 if __name__ == "__main__":
-    main()
+    app = CSVMagicEditor()
+    app.mainloop()
